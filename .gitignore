@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+publish/
+*.nupkg
+*.log
+mcp/node_modules/

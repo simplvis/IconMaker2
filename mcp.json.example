@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "iconmaker2": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\Source\\IconMaker2\\mcp\\iconmaker2-mcp.mjs"],
+      "env": {
+        "ICONMAKER2_URL": "http://127.0.0.1:17890"
+      }
+    }
+  }
+}
