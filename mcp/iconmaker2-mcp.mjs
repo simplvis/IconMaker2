@@ -72,24 +72,30 @@ const TOOLS = [
   {
     name: "get_canvas",
     description:
-      "실행 중인 IconMaker2 캔버스 상태를 본다. 64x64 격자 요약과 PNG(base64). include_pixels=true면 점유 픽셀 목록도 준다.",
+      "캔버스 상태를 본다. 기본은 전체 요약+PNG. x,y,w,h를 주면 그 구역만 PNG와 픽셀 목록을 준다. 수정 전에 구역을 먼저 볼 것.",
     inputSchema: {
       type: "object",
       properties: {
-        include_png: { type: "boolean", description: "기본 true. 64x64 PNG base64" },
-        include_pixels: { type: "boolean", description: "기본 false. 색 있는 칸 목록" },
+        include_png: { type: "boolean", description: "기본 true" },
+        include_pixels: { type: "boolean", description: "전체 조회 시 기본 false. 구역 조회 시 기본 true" },
+        x: { type: "integer" },
+        y: { type: "integer" },
+        w: { type: "integer" },
+        h: { type: "integer" },
       },
     },
   },
   {
     name: "import_png",
     description:
-      "그림 파일을 64x64 격자로 내린다(초안). path 또는 image_base64 중 하나.",
+      "그림을 64x64 격자로 내린다(초안). path 또는 image_base64. max_colors로 팔레트를 줄이고 knockout_corners로 밝은 네 모서리를 투명으로 뚫는다.",
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "로컬 PNG/JPG 경로" },
-        image_base64: { type: "string", description: "PNG/JPEG base64 (data: URL 가능)" },
+        path: { type: "string" },
+        image_base64: { type: "string" },
+        max_colors: { type: "integer", description: "예: 16. 0이면 줄이지 않음" },
+        knockout_corners: { type: "boolean", description: "네 모서리 flood 투명" },
       },
     },
   },
@@ -134,6 +140,62 @@ const TOOLS = [
     description: "마지막 캔버스 변경을 되돌린다.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "flood_erase",
+    description: "(x,y)에서 비슷한 색을 4방향으로 지워 투명으로 만든다. 모서리·얼룩 제거용.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "integer" },
+        y: { type: "integer" },
+        tolerance: { type: "integer", description: "RGB 합 거리. 기본 32" },
+      },
+      required: ["x", "y"],
+    },
+  },
+  {
+    name: "recolor",
+    description: "from 색에 가까운 칸을 to로 바꾼다. to가 빈 문자열이면 투명. 점 하나하나가 아니라 색 단위 수정.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "#RRGGBB" },
+        to: { type: "string", description: "#RRGGBB 또는 빈 문자열" },
+        tolerance: { type: "integer", description: "기본 16" },
+      },
+      required: ["from", "to"],
+    },
+  },
+  {
+    name: "fill_rect",
+    description: "사각형을 한 색으로 채운다. color가 빈 문자열이면 지운다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "integer" },
+        y: { type: "integer" },
+        w: { type: "integer" },
+        h: { type: "integer" },
+        color: { type: "string" },
+      },
+      required: ["x", "y", "w", "h", "color"],
+    },
+  },
+  {
+    name: "draw_line",
+    description: "두 점 사이 1픽셀 직선.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x0: { type: "integer" },
+        y0: { type: "integer" },
+        x1: { type: "integer" },
+        y1: { type: "integer" },
+        color: { type: "string" },
+      },
+      required: ["x0", "y0", "x1", "y1", "color"],
+    },
+  },
 ];
 
 async function callTool(name, args) {
@@ -141,9 +203,19 @@ async function callTool(name, args) {
   switch (name) {
     case "get_canvas": {
       const png = args.include_png !== false;
-      const pixels = args.include_pixels === true;
-      const q = `?png=${png ? "1" : "0"}&pixels=${pixels ? "1" : "0"}`;
-      return okText(await api("GET", "/canvas" + q));
+      const hasRegion = [args.x, args.y, args.w, args.h].every((v) => v !== undefined && v !== null);
+      const pixels = args.include_pixels === true || (hasRegion && args.include_pixels !== false);
+      const q = new URLSearchParams({
+        png: png ? "1" : "0",
+        pixels: pixels ? "1" : "0",
+      });
+      if (hasRegion) {
+        q.set("x", String(args.x));
+        q.set("y", String(args.y));
+        q.set("w", String(args.w));
+        q.set("h", String(args.h));
+      }
+      return okText(await api("GET", "/canvas?" + q.toString()));
     }
     case "import_png": {
       if (!args.path && !args.image_base64) {
@@ -152,6 +224,8 @@ async function callTool(name, args) {
       return okText(await api("POST", "/import", {
         path: args.path,
         image_base64: args.image_base64,
+        max_colors: args.max_colors ?? 0,
+        knockout_corners: args.knockout_corners === true,
       }));
     }
     case "set_pixels":
@@ -166,6 +240,26 @@ async function callTool(name, args) {
       }));
     case "undo":
       return okText(await api("POST", "/undo", {}));
+    case "flood_erase":
+      return okText(await api("POST", "/flood_erase", {
+        x: args.x,
+        y: args.y,
+        tolerance: args.tolerance ?? 32,
+      }));
+    case "recolor":
+      return okText(await api("POST", "/recolor", {
+        from: args.from,
+        to: args.to,
+        tolerance: args.tolerance ?? 16,
+      }));
+    case "fill_rect":
+      return okText(await api("POST", "/fill_rect", {
+        x: args.x, y: args.y, w: args.w, h: args.h, color: args.color,
+      }));
+    case "draw_line":
+      return okText(await api("POST", "/draw_line", {
+        x0: args.x0, y0: args.y0, x1: args.x1, y1: args.y1, color: args.color,
+      }));
     default:
       return errText(`unknown tool: ${name}`);
   }

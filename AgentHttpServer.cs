@@ -103,13 +103,17 @@ namespace IconMaker2
                 {
                     bool png = QueryFlag(req, "png", defaultValue: true);
                     bool pixels = QueryFlag(req, "pixels", defaultValue: false);
-                    await WriteJson(res, 200, _form.AgentGetCanvas(png, pixels));
+                    int? rx = QueryInt(req, "x");
+                    int? ry = QueryInt(req, "y");
+                    int? rw = QueryInt(req, "w");
+                    int? rh = QueryInt(req, "h");
+                    await WriteJson(res, 200, _form.AgentGetCanvas(png, pixels, rx, ry, rw, rh));
                     return;
                 }
                 if (req.HttpMethod == "POST" && path == "/import")
                 {
-                    byte[] image = await ReadImportBytes(req);
-                    await WriteJson(res, 200, _form.AgentImport(image));
+                    var imp = await ReadImportRequest(req);
+                    await WriteJson(res, 200, _form.AgentImport(imp.Bytes, imp.MaxColors, imp.KnockoutCorners));
                     return;
                 }
                 if (req.HttpMethod == "POST" && path == "/pixels")
@@ -145,6 +149,46 @@ namespace IconMaker2
                     await WriteJson(res, 200, _form.AgentUndo());
                     return;
                 }
+                if (req.HttpMethod == "POST" && path == "/flood_erase")
+                {
+                    using var doc = JsonDocument.Parse(await ReadBody(req));
+                    int fx = GetInt(doc.RootElement, "x", -1);
+                    int fy = GetInt(doc.RootElement, "y", -1);
+                    int tol = GetInt(doc.RootElement, "tolerance", 32);
+                    await WriteJson(res, 200, _form.AgentFloodErase(fx, fy, tol));
+                    return;
+                }
+                if (req.HttpMethod == "POST" && path == "/recolor")
+                {
+                    using var doc = JsonDocument.Parse(await ReadBody(req));
+                    string from = GetStr(doc.RootElement, "from") ?? "";
+                    string to = GetStr(doc.RootElement, "to") ?? "";
+                    int tol = GetInt(doc.RootElement, "tolerance", 16);
+                    await WriteJson(res, 200, _form.AgentRecolor(from, to, tol));
+                    return;
+                }
+                if (req.HttpMethod == "POST" && path == "/fill_rect")
+                {
+                    using var doc = JsonDocument.Parse(await ReadBody(req));
+                    await WriteJson(res, 200, _form.AgentFillRect(
+                        GetInt(doc.RootElement, "x", 0),
+                        GetInt(doc.RootElement, "y", 0),
+                        GetInt(doc.RootElement, "w", 1),
+                        GetInt(doc.RootElement, "h", 1),
+                        GetStr(doc.RootElement, "color") ?? ""));
+                    return;
+                }
+                if (req.HttpMethod == "POST" && path == "/draw_line")
+                {
+                    using var doc = JsonDocument.Parse(await ReadBody(req));
+                    await WriteJson(res, 200, _form.AgentDrawLine(
+                        GetInt(doc.RootElement, "x0", 0),
+                        GetInt(doc.RootElement, "y0", 0),
+                        GetInt(doc.RootElement, "x1", 0),
+                        GetInt(doc.RootElement, "y1", 0),
+                        GetStr(doc.RootElement, "color") ?? ""));
+                    return;
+                }
 
                 await WriteJson(res, 404, new
                 {
@@ -153,7 +197,8 @@ namespace IconMaker2
                     endpoints = new[]
                     {
                         "GET /health", "GET /canvas", "GET /canvas.png",
-                        "POST /import", "POST /pixels", "POST /export", "POST /undo"
+                        "POST /import", "POST /pixels", "POST /export", "POST /undo",
+                        "POST /flood_erase", "POST /recolor", "POST /fill_rect", "POST /draw_line"
                     }
                 });
             }
@@ -171,20 +216,43 @@ namespace IconMaker2
             return v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static int? QueryInt(HttpListenerRequest req, string name)
+        {
+            string? v = req.QueryString[name];
+            if (int.TryParse(v, out int n)) return n;
+            return null;
+        }
+
+        private static int GetInt(JsonElement el, string name, int fallback)
+        {
+            if (!el.TryGetProperty(name, out var p)) return fallback;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out int n)) return n;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out n)) return n;
+            return fallback;
+        }
+
+        private static string? GetStr(JsonElement el, string name)
+        {
+            if (!el.TryGetProperty(name, out var p)) return null;
+            return p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString();
+        }
+
         private static async Task<string> ReadBody(HttpListenerRequest req)
         {
             using var reader = new StreamReader(req.InputStream, req.ContentEncoding ?? Encoding.UTF8);
             return await reader.ReadToEndAsync();
         }
 
-        private static async Task<byte[]> ReadImportBytes(HttpListenerRequest req)
+        private readonly record struct ImportRequest(byte[] Bytes, int MaxColors, bool KnockoutCorners);
+
+        private static async Task<ImportRequest> ReadImportRequest(HttpListenerRequest req)
         {
             string? ctype = req.ContentType ?? "";
             if (ctype.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
             {
                 using var ms = new MemoryStream();
                 await req.InputStream.CopyToAsync(ms);
-                return ms.ToArray();
+                return new ImportRequest(ms.ToArray(), 0, false);
             }
 
             string body = await ReadBody(req);
@@ -192,6 +260,16 @@ namespace IconMaker2
                 throw new InvalidOperationException("import 본문이 비어 있다.");
 
             using var doc = JsonDocument.Parse(body);
+            int maxColors = GetInt(doc.RootElement, "max_colors", GetInt(doc.RootElement, "maxColors", 0));
+            bool knockout = false;
+            if (doc.RootElement.TryGetProperty("knockout_corners", out var kc) ||
+                doc.RootElement.TryGetProperty("knockoutCorners", out kc))
+            {
+                knockout = kc.ValueKind == JsonValueKind.True ||
+                           (kc.ValueKind == JsonValueKind.String && kc.GetString() == "true");
+            }
+
+            byte[] bytes;
             if (doc.RootElement.TryGetProperty("image_base64", out var b64) ||
                 doc.RootElement.TryGetProperty("imageBase64", out b64))
             {
@@ -200,16 +278,19 @@ namespace IconMaker2
                 int comma = s.IndexOf(',');
                 if (s.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0)
                     s = s[(comma + 1)..];
-                return Convert.FromBase64String(s);
+                bytes = Convert.FromBase64String(s);
             }
-            if (doc.RootElement.TryGetProperty("path", out var pathProp))
+            else if (doc.RootElement.TryGetProperty("path", out var pathProp))
             {
                 string? path = pathProp.GetString();
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                     throw new FileNotFoundException("이미지 경로를 찾을 수 없다.", path);
-                return await File.ReadAllBytesAsync(path);
+                bytes = await File.ReadAllBytesAsync(path);
             }
-            throw new InvalidOperationException("image_base64 또는 path가 필요하다.");
+            else
+                throw new InvalidOperationException("image_base64 또는 path가 필요하다.");
+
+            return new ImportRequest(bytes, maxColors, knockout);
         }
 
         private static async Task WriteJson(HttpListenerResponse res, int status, object payload)

@@ -132,6 +132,86 @@ namespace IconMaker2
             return pixels;
         }
 
+        public static int ColorDistance(Color a, Color b) =>
+            Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
+
+        public static Color? ParseHex(string? hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex)) return null;
+            try { return ColorTranslator.FromHtml(hex); }
+            catch { return null; }
+        }
+
+        public static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+        /// <summary>불투명 픽셀을 maxColors개로 줄인다. 이미 이하면 그대로.</summary>
+        public static List<PixelInfo> LimitColors(List<PixelInfo> pixels, int maxColors)
+        {
+            if (maxColors < 2 || pixels.Count == 0) return pixels;
+            var parsed = new List<(PixelInfo p, Color c)>();
+            foreach (var p in pixels)
+            {
+                Color? c = ParseHex(p.Color);
+                if (c is Color col) parsed.Add((p, col));
+            }
+            var unique = parsed.Select(x => ToHex(x.c)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if (unique <= maxColors) return pixels;
+
+            var palette = MedianCut(parsed.Select(x => x.c).ToList(), maxColors);
+            foreach (var (p, c) in parsed)
+            {
+                Color best = palette[0];
+                int bestD = int.MaxValue;
+                foreach (var pal in palette)
+                {
+                    int d = ColorDistance(c, pal);
+                    if (d < bestD) { bestD = d; best = pal; }
+                }
+                p.Color = ToHex(best);
+            }
+            return pixels;
+        }
+
+        private static List<Color> MedianCut(List<Color> colors, int maxColors)
+        {
+            var boxes = new List<List<Color>> { colors };
+            while (boxes.Count < maxColors)
+            {
+                int idx = 0;
+                int bestRange = -1;
+                for (int i = 0; i < boxes.Count; i++)
+                {
+                    var b = boxes[i];
+                    int r = b.Max(c => c.R) - b.Min(c => c.R);
+                    int g = b.Max(c => c.G) - b.Min(c => c.G);
+                    int bl = b.Max(c => c.B) - b.Min(c => c.B);
+                    int range = Math.Max(r, Math.Max(g, bl));
+                    if (range > bestRange && b.Count > 1) { bestRange = range; idx = i; }
+                }
+                if (bestRange <= 0) break;
+                var box = boxes[idx];
+                int rr = box.Max(c => c.R) - box.Min(c => c.R);
+                int gg = box.Max(c => c.G) - box.Min(c => c.G);
+                int bb = box.Max(c => c.B) - box.Min(c => c.B);
+                IOrderedEnumerable<Color> ordered = rr >= gg && rr >= bb
+                    ? box.OrderBy(c => c.R)
+                    : gg >= bb ? box.OrderBy(c => c.G) : box.OrderBy(c => c.B);
+                var sorted = ordered.ToList();
+                int mid = sorted.Count / 2;
+                boxes.RemoveAt(idx);
+                boxes.Add(sorted.GetRange(0, mid));
+                boxes.Add(sorted.GetRange(mid, sorted.Count - mid));
+            }
+
+            return boxes.Select(b =>
+            {
+                int r = (int)b.Average(c => c.R);
+                int g = (int)b.Average(c => c.G);
+                int bl = (int)b.Average(c => c.B);
+                return Color.FromArgb(255, r, g, bl);
+            }).ToList();
+        }
+
         // PNG 기반 고품질 ICO 파일 저장
         public static void SaveAsHighQualityIco(Bitmap bmp, string filePath)
         {

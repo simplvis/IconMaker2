@@ -139,9 +139,13 @@ MCP는 앱 안의 기능이 아니라, **Grok/Claude/Cursor 같은 CLI가 IconMa
 
 | 도구 | 역할 |
 |---|---|
-| `get_canvas` | 현재 64×64 캔버스 보기 |
-| `import_png` | 그림 파일을 격자로 내리기 (초안) |
-| `set_pixels` | 점 찍기 / 지우기 (다듬기) |
+| `get_canvas` | 전체 요약+PNG. `x,y,w,h`면 그 구역만 픽셀 |
+| `import_png` | 초안. `max_colors`, `knockout_corners` 옵션 |
+| `flood_erase` | (x,y)에서 비슷한 색을 투명으로 |
+| `recolor` | 이 색 → 저 색(또는 투명) |
+| `fill_rect` | 사각형 채우기/지우기 |
+| `draw_line` | 직선 |
+| `set_pixels` | 점 단위 찍기/지우기 |
 | `export_icon` | PNG 또는 ICO 저장 |
 | `undo` | 마지막 변경 되돌리기 |
 
@@ -228,11 +232,15 @@ MCP는 아래 API의 얇은 껍질이다. 앱이 켜진 동안만 동작한다.
 | 호출 | 역할 |
 |---|---|
 | `GET /health` | 생존 확인 |
-| `GET /canvas` | 요약 + PNG (`?png=1&pixels=0`) |
+| `GET /canvas` | `?png=1&pixels=0&x=&y=&w=&h=` |
 | `GET /canvas.png` | 64×64 PNG |
-| `POST /import` | `{ "path" }` 또는 `{ "image_base64" }` |
-| `POST /pixels` | `{ "mode": "partial"\|"full", "pixels": [{ "x", "y", "color" }] }` — 지울 때 `color`는 `""` |
-| `POST /export` | `{ "path", "format": "png"\|"ico" }` |
+| `POST /import` | `{ path 또는 image_base64, max_colors, knockout_corners }` |
+| `POST /pixels` | `{ mode, pixels }` |
+| `POST /flood_erase` | `{ x, y, tolerance }` |
+| `POST /recolor` | `{ from, to, tolerance }` |
+| `POST /fill_rect` | `{ x, y, w, h, color }` |
+| `POST /draw_line` | `{ x0, y0, x1, y1, color }` |
+| `POST /export` | `{ path, format }` |
 | `POST /undo` | 되돌리기 |
 
 ---
