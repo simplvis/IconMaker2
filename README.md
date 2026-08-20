@@ -139,10 +139,10 @@ MCP는 앱 안의 기능이 아니라, **Grok/Claude/Cursor 같은 CLI가 IconMa
 
 | 도구 | 역할 |
 |---|---|
-| `get_canvas` | 전체 요약+PNG. `x,y,w,h`면 그 구역만 픽셀 |
+| `get_canvas` | 전체 요약+PNG. `x,y,w,h`면 8배 확대 PNG + 배경색 제외 픽셀(최대 256) |
 | `import_png` | 초안. `max_colors`, `knockout_corners` 옵션 |
-| `flood_erase` | (x,y)에서 비슷한 색을 투명으로 |
-| `recolor` | 이 색 → 저 색(또는 투명) |
+| `flood_erase` | (x,y)에서 비슷한 색을 투명으로. `w,h`면 박스 안만 |
+| `recolor` | 이 색 → 저 색. `x,y,w,h`면 박스 안만 |
 | `fill_rect` | 사각형 채우기/지우기 |
 | `draw_line` | 직선 |
 | `set_pixels` | 점 단위 찍기/지우기 |
@@ -236,8 +236,8 @@ MCP는 아래 API의 얇은 껍질이다. 앱이 켜진 동안만 동작한다.
 | `GET /canvas.png` | 64×64 PNG |
 | `POST /import` | `{ path 또는 image_base64, max_colors, knockout_corners }` |
 | `POST /pixels` | `{ mode, pixels }` |
-| `POST /flood_erase` | `{ x, y, tolerance }` |
-| `POST /recolor` | `{ from, to, tolerance }` |
+| `POST /flood_erase` | `{ x, y, w, h, tolerance }` |
+| `POST /recolor` | `{ from, to, x, y, w, h, tolerance }` |
 | `POST /fill_rect` | `{ x, y, w, h, color }` |
 | `POST /draw_line` | `{ x0, y0, x1, y1, color }` |
 | `POST /export` | `{ path, format }` |

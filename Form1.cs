@@ -695,14 +695,40 @@ namespace IconMaker2
 
                 var summary = JsonSerializer.Deserialize<JsonElement>(BuildCanvasSummary());
                 string? png = includePng
-                    ? Convert.ToBase64String(region ? RenderRegionPng(rx, ry, rw, rh) : RenderCanvasPng(GridSize))
+                    ? Convert.ToBase64String(region ? RenderRegionPng(rx, ry, rw, rh, scale: 8) : RenderCanvasPng(GridSize))
                     : null;
-                List<PixelInfo>? pixels = includePixels ? ListOccupiedPixels(rx, ry, rw, rh) : null;
+                string? skippedBg = null;
+                int omitted = 0;
+                List<PixelInfo>? pixels = null;
+                if (includePixels)
+                {
+                    var raw = ListOccupiedPixels(rx, ry, rw, rh);
+                    if (region && raw.Count > 0)
+                    {
+                        var top = raw.GroupBy(p => p.Color, StringComparer.OrdinalIgnoreCase)
+                            .OrderByDescending(g => g.Count())
+                            .First();
+                        if (top.Count() * 2 >= rw * rh)
+                        {
+                            skippedBg = top.Key;
+                            raw = raw.Where(p => !p.Color.Equals(skippedBg, StringComparison.OrdinalIgnoreCase)).ToList();
+                        }
+                    }
+                    const int cap = 256;
+                    if (raw.Count > cap)
+                    {
+                        omitted = raw.Count - cap;
+                        raw = raw.Take(cap).ToList();
+                    }
+                    pixels = raw;
+                }
                 return new
                 {
                     ok = true,
                     grid = GridSize,
                     region = region ? new { x = rx, y = ry, w = rw, h = rh } : null,
+                    skipped_bg = skippedBg,
+                    omitted,
                     summary,
                     png_base64 = png,
                     pixels
@@ -792,22 +818,23 @@ namespace IconMaker2
             });
         }
 
-        internal object AgentFloodErase(int x, int y, int tolerance)
+        internal object AgentFloodErase(int x, int y, int tolerance, int? bx, int? by, int? bw, int? bh)
         {
             return OnUi(() =>
             {
                 if (x < 0 || y < 0 || x >= GridSize || y >= GridSize)
                     return (object)new { ok = false, error = "좌표가 격자 밖이다." };
+                ClipRect(bx, by, bw, bh, out int x0, out int y0, out int x1, out int y1);
                 SaveUndoState();
                 int n;
-                lock (_pixelLock) n = FloodEraseLocked(x, y, tolerance, requireLight: false);
+                lock (_pixelLock) n = FloodEraseLocked(x, y, tolerance, requireLight: false, x0, y0, x1, y1);
                 canvasPanel.Invalidate();
                 LogSystemMessage($"에이전트: flood_erase ({x},{y}) {n}칸");
                 return new { ok = true, erased = n };
             });
         }
 
-        internal object AgentRecolor(string fromHex, string toHex, int tolerance)
+        internal object AgentRecolor(string fromHex, string toHex, int tolerance, int? bx, int? by, int? bw, int? bh)
         {
             return OnUi(() =>
             {
@@ -815,13 +842,14 @@ namespace IconMaker2
                 if (from is not Color src)
                     return (object)new { ok = false, error = "from 색이 필요하다." };
                 Color? dest = IconRenderer.ParseHex(toHex);
+                ClipRect(bx, by, bw, bh, out int x0, out int y0, out int x1, out int y1);
                 SaveUndoState();
                 int n = 0;
                 lock (_pixelLock)
                 {
-                    for (int yy = 0; yy < GridSize; yy++)
+                    for (int yy = y0; yy < y1; yy++)
                     {
-                        for (int xx = 0; xx < GridSize; xx++)
+                        for (int xx = x0; xx < x1; xx++)
                         {
                             if (_pixels[xx, yy] is not Color c) continue;
                             if (IconRenderer.ColorDistance(c, src) > tolerance) continue;
@@ -932,11 +960,15 @@ namespace IconMaker2
             return list;
         }
 
-        private byte[] RenderRegionPng(int x0, int y0, int w, int h)
+        private byte[] RenderRegionPng(int x0, int y0, int w, int h, int scale)
         {
-            using Bitmap bmp = new Bitmap(Math.Max(1, w), Math.Max(1, h));
+            int sc = Math.Max(1, scale);
+            using Bitmap bmp = new Bitmap(Math.Max(1, w * sc), Math.Max(1, h * sc));
             using (Graphics g = Graphics.FromImage(bmp))
             {
+                g.SmoothingMode = SmoothingMode.None;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
                 g.Clear(Color.Transparent);
                 lock (_pixelLock)
                 {
@@ -948,7 +980,7 @@ namespace IconMaker2
                             if (gx < 0 || gy < 0 || gx >= GridSize || gy >= GridSize) continue;
                             if (_pixels[gx, gy] is not Color c) continue;
                             using var br = new SolidBrush(c);
-                            g.FillRectangle(br, x, y, 1, 1);
+                            g.FillRectangle(br, x * sc, y * sc, sc, sc);
                         }
                     }
                 }
@@ -958,21 +990,40 @@ namespace IconMaker2
             return ms.ToArray();
         }
 
+        private static void ClipRect(int? bx, int? by, int? bw, int? bh, out int x0, out int y0, out int x1, out int y1)
+        {
+            if (bx is int x && by is int y && bw is int w && w > 0 && bh is int h && h > 0)
+            {
+                x0 = Math.Clamp(x, 0, GridSize - 1);
+                y0 = Math.Clamp(y, 0, GridSize - 1);
+                x1 = Math.Clamp(x0 + w, 1, GridSize);
+                y1 = Math.Clamp(y0 + h, 1, GridSize);
+            }
+            else
+            {
+                x0 = 0;
+                y0 = 0;
+                x1 = GridSize;
+                y1 = GridSize;
+            }
+        }
+
         private int KnockoutCorners(int tolerance)
         {
             int n = 0;
             lock (_pixelLock)
             {
-                n += FloodEraseLocked(0, 0, tolerance, requireLight: true);
-                n += FloodEraseLocked(GridSize - 1, 0, tolerance, requireLight: true);
-                n += FloodEraseLocked(0, GridSize - 1, tolerance, requireLight: true);
-                n += FloodEraseLocked(GridSize - 1, GridSize - 1, tolerance, requireLight: true);
+                n += FloodEraseLocked(0, 0, tolerance, true, 0, 0, GridSize, GridSize);
+                n += FloodEraseLocked(GridSize - 1, 0, tolerance, true, 0, 0, GridSize, GridSize);
+                n += FloodEraseLocked(0, GridSize - 1, tolerance, true, 0, 0, GridSize, GridSize);
+                n += FloodEraseLocked(GridSize - 1, GridSize - 1, tolerance, true, 0, 0, GridSize, GridSize);
             }
             return n;
         }
 
-        private int FloodEraseLocked(int sx, int sy, int tolerance, bool requireLight)
+        private int FloodEraseLocked(int sx, int sy, int tolerance, bool requireLight, int x0, int y0, int x1, int y1)
         {
+            if (sx < x0 || sy < y0 || sx >= x1 || sy >= y1) return 0;
             if (_pixels[sx, sy] is not Color seed) return 0;
             if (requireLight && (seed.R + seed.G + seed.B) / 3 < 160) return 0;
 
@@ -983,7 +1034,7 @@ namespace IconMaker2
             while (q.Count > 0)
             {
                 var (x, y) = q.Dequeue();
-                if (x < 0 || y < 0 || x >= GridSize || y >= GridSize || seen[x, y]) continue;
+                if (x < x0 || y < y0 || x >= x1 || y >= y1 || seen[x, y]) continue;
                 seen[x, y] = true;
                 if (_pixels[x, y] is not Color c) continue;
                 if (IconRenderer.ColorDistance(c, seed) > tolerance) continue;

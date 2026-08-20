@@ -72,7 +72,7 @@ const TOOLS = [
   {
     name: "get_canvas",
     description:
-      "캔버스 상태를 본다. 기본은 전체 요약+PNG. x,y,w,h를 주면 그 구역만 PNG와 픽셀 목록을 준다. 수정 전에 구역을 먼저 볼 것.",
+      "캔버스 상태를 본다. 기본은 전체 요약+PNG. x,y,w,h면 그 구역을 8배 PNG로 주고, 배경(가장 많은 색)은 뺀 픽셀만 최대 256개. 수정 전에 구역을 먼저 볼 것.",
     inputSchema: {
       type: "object",
       properties: {
@@ -142,12 +142,14 @@ const TOOLS = [
   },
   {
     name: "flood_erase",
-    description: "(x,y)에서 비슷한 색을 4방향으로 지워 투명으로 만든다. 모서리·얼룩 제거용.",
+    description: "(x,y)에서 비슷한 색을 투명으로. w,h를 주면 그 박스 안에서만.",
     inputSchema: {
       type: "object",
       properties: {
         x: { type: "integer" },
         y: { type: "integer" },
+        w: { type: "integer", description: "선택. 있으면 (x,y)부터 박스 클립" },
+        h: { type: "integer" },
         tolerance: { type: "integer", description: "RGB 합 거리. 기본 32" },
       },
       required: ["x", "y"],
@@ -155,13 +157,17 @@ const TOOLS = [
   },
   {
     name: "recolor",
-    description: "from 색에 가까운 칸을 to로 바꾼다. to가 빈 문자열이면 투명. 점 하나하나가 아니라 색 단위 수정.",
+    description: "from 색을 to로. to가 빈 문자열이면 투명. x,y,w,h가 있으면 그 박스 안에서만 (봉투 등 다른 민트를 건드리지 않음).",
     inputSchema: {
       type: "object",
       properties: {
         from: { type: "string", description: "#RRGGBB" },
         to: { type: "string", description: "#RRGGBB 또는 빈 문자열" },
         tolerance: { type: "integer", description: "기본 16" },
+        x: { type: "integer" },
+        y: { type: "integer" },
+        w: { type: "integer" },
+        h: { type: "integer" },
       },
       required: ["from", "to"],
     },
@@ -244,6 +250,8 @@ async function callTool(name, args) {
       return okText(await api("POST", "/flood_erase", {
         x: args.x,
         y: args.y,
+        w: args.w,
+        h: args.h,
         tolerance: args.tolerance ?? 32,
       }));
     case "recolor":
@@ -251,6 +259,10 @@ async function callTool(name, args) {
         from: args.from,
         to: args.to,
         tolerance: args.tolerance ?? 16,
+        x: args.x,
+        y: args.y,
+        w: args.w,
+        h: args.h,
       }));
     case "fill_rect":
       return okText(await api("POST", "/fill_rect", {

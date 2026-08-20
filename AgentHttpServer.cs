@@ -152,19 +152,23 @@ namespace IconMaker2
                 if (req.HttpMethod == "POST" && path == "/flood_erase")
                 {
                     using var doc = JsonDocument.Parse(await ReadBody(req));
-                    int fx = GetInt(doc.RootElement, "x", -1);
-                    int fy = GetInt(doc.RootElement, "y", -1);
-                    int tol = GetInt(doc.RootElement, "tolerance", 32);
-                    await WriteJson(res, 200, _form.AgentFloodErase(fx, fy, tol));
+                    var el = doc.RootElement;
+                    int fx = GetInt(el, "x", -1);
+                    int fy = GetInt(el, "y", -1);
+                    int tol = GetInt(el, "tolerance", 32);
+                    ReadClip(el, out int? cx, out int? cy, out int? cw, out int? ch);
+                    await WriteJson(res, 200, _form.AgentFloodErase(fx, fy, tol, cx, cy, cw, ch));
                     return;
                 }
                 if (req.HttpMethod == "POST" && path == "/recolor")
                 {
                     using var doc = JsonDocument.Parse(await ReadBody(req));
-                    string from = GetStr(doc.RootElement, "from") ?? "";
-                    string to = GetStr(doc.RootElement, "to") ?? "";
-                    int tol = GetInt(doc.RootElement, "tolerance", 16);
-                    await WriteJson(res, 200, _form.AgentRecolor(from, to, tol));
+                    var el = doc.RootElement;
+                    string from = GetStr(el, "from") ?? "";
+                    string to = GetStr(el, "to") ?? "";
+                    int tol = GetInt(el, "tolerance", 16);
+                    ReadClip(el, out int? cx, out int? cy, out int? cw, out int? ch);
+                    await WriteJson(res, 200, _form.AgentRecolor(from, to, tol, cx, cy, cw, ch));
                     return;
                 }
                 if (req.HttpMethod == "POST" && path == "/fill_rect")
@@ -235,6 +239,25 @@ namespace IconMaker2
         {
             if (!el.TryGetProperty(name, out var p)) return null;
             return p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString();
+        }
+
+        private static void ReadClip(JsonElement el, out int? x, out int? y, out int? w, out int? h)
+        {
+            int cw = GetInt(el, "clip_w", GetInt(el, "w", 0));
+            int ch = GetInt(el, "clip_h", GetInt(el, "h", 0));
+            if (cw <= 0 || ch <= 0)
+            {
+                x = y = w = h = null;
+                return;
+            }
+            int cx = GetInt(el, "clip_x", int.MinValue);
+            int cy = GetInt(el, "clip_y", int.MinValue);
+            if (cx == int.MinValue) cx = GetInt(el, "x", 0);
+            if (cy == int.MinValue) cy = GetInt(el, "y", 0);
+            x = cx;
+            y = cy;
+            w = cw;
+            h = ch;
         }
 
         private static async Task<string> ReadBody(HttpListenerRequest req)
